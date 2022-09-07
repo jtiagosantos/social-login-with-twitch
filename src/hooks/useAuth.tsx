@@ -1,8 +1,18 @@
-import { makeRedirectUri, revokeAsync, startAsync } from 'expo-auth-session';
+import { revokeAsync, startAsync } from 'expo-auth-session';
 import React, { useEffect, createContext, useContext, useState, ReactNode } from 'react';
-import { generateRandom } from 'expo-auth-session/build/PKCE';
+
+import { CLIENT_ID, AUTH_URL, STATE } from '../constants/auth';
 
 import { api } from '../services/api';
+
+interface AuthorizationResponse {
+  type: string;
+  params: {
+    error: string;
+    state: string;
+    access_token: string;
+  };
+}
 
 interface User {
   id: number;
@@ -25,72 +35,62 @@ interface AuthProviderData {
 
 const AuthContext = createContext({} as AuthContextData);
 
-const twitchEndpoints = {
-  authorization: 'https://id.twitch.tv/oauth2/authorize',
-  revocation: 'https://id.twitch.tv/oauth2/revoke'
-};
-
 function AuthProvider({ children }: AuthProviderData) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [user, setUser] = useState({} as User);
   const [userToken, setUserToken] = useState('');
 
-  // get CLIENT_ID from environment variables
-
   async function signIn() {
     try {
-      // set isLoggingIn to true
+      setIsLoggingIn(true);
 
-      // REDIRECT_URI - create OAuth redirect URI using makeRedirectUri() with "useProxy" option set to true
-      // RESPONSE_TYPE - set to "token"
-      // SCOPE - create a space-separated list of the following scopes: "openid", "user:read:email" and "user:read:follows"
-      // FORCE_VERIFY - set to true
-      // STATE - generate random 30-length string using generateRandom() with "size" set to 30
+      const { type, params } = await startAsync({ authUrl: AUTH_URL }) as AuthorizationResponse;
 
-      // assemble authUrl with twitchEndpoint authorization, client_id, 
-      // redirect_uri, response_type, scope, force_verify and state
+      if (type === 'success' && params?.error !== 'access_denied') {
+        if (params?.state !== STATE) {
+          throw 'Invalid state value';
+        }
 
-      // call startAsync with authUrl
+        api.defaults.headers.common['Authorization'] = `Bearer ${params?.access_token}`;
 
-      // verify if startAsync response.type equals "success" and response.params.error differs from "access_denied"
-      // if true, do the following:
+        const userResponse = await api.get('/users');
 
-        // verify if startAsync response.params.state differs from STATE
-        // if true, do the following:
-          // throw an error with message "Invalid state value"
-
-        // add access_token to request's authorization header
-
-        // call Twitch API's users route
-
-        // set user state with response from Twitch API's route "/users"
-        // set userToken state with response's access_token from startAsync
+        setUser(userResponse?.data?.data?.[0]);
+        setUserToken(params?.access_token);
+      }
     } catch (error) {
-      // throw an error
+      throw new Error();
     } finally {
-      // set isLoggingIn to false
+      setIsLoggingIn(false);
     }
   }
 
   async function signOut() {
     try {
-      // set isLoggingOut to true
+      setIsLoggingOut(true);
 
-      // call revokeAsync with access_token, client_id and twitchEndpoint revocation
+      await revokeAsync(
+      {
+        token: userToken,
+        clientId: CLIENT_ID,
+      }, 
+      {
+        revocationEndpoint: 'https://id.twitch.tv/oauth2/revoke',
+      });
     } catch (error) {
     } finally {
-      // set user state to an empty User object
-      // set userToken state to an empty string
+      setUser({} as User);
+      setUserToken('');
 
-      // remove "access_token" from request's authorization header
+      delete api.defaults.headers.common['Authorization'];
 
-      // set isLoggingOut to false
+      setIsLoggingOut(false);
     }
   }
 
   useEffect(() => {
-    // add client_id to request's "Client-Id" header
+    api.defaults.headers.common['Client-Id'] = CLIENT_ID;
   }, [])
 
   return (
